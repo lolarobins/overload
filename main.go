@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"lolarobins.ca/overload/fetch"
 	"lolarobins.ca/overload/input"
 	"lolarobins.ca/overload/log"
 	"lolarobins.ca/overload/node"
@@ -14,6 +15,12 @@ import (
 
 func shutdown() {
 	log.Info("Stopping")
+
+	if err := webserver.Stop(); err != nil {
+		log.Error("Stopping web server: " + err.Error())
+	}
+
+	webserver.ShutdownLock.Lock()
 
 	log.Info("Killing remaining active nodes")
 	node.KillAll()
@@ -44,18 +51,21 @@ func main() {
 		return
 	}
 
-	input.Init()
-	if err := settings.Init(); err != nil {
+	input.Init() // input
+
+	if err := settings.Init(); err != nil { // settings
 		log.Error("Intializing settings: " + err.Error())
 	}
 
-	if err := node.Init(); err != nil {
+	if err := node.Init(); err != nil { // nodes
 		log.Error("Intializing nodes: " + err.Error())
 	}
 
-	if err := webserver.Init(); err != nil {
+	if err := webserver.Init(); err != nil { // webserver
 		log.Error("Intializing web server: " + err.Error())
 	}
+
+	fetch.Init() // fetch jar util
 
 	log.Info("Startup finished")
 

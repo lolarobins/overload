@@ -2,6 +2,7 @@ package node
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,8 +11,9 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 
-	"github.com/jcuga/go-upnp"
+	"gitlab.com/NebulousLabs/go-upnp"
 	"lolarobins.ca/overload/input"
 	"lolarobins.ca/overload/log"
 	"lolarobins.ca/overload/settings"
@@ -36,8 +38,9 @@ type Node struct {
 	writer  *io.WriteCloser
 }
 
-var Active = make(map[string]*Node)
-var Router upnp.IGD
+var Nodes = make(map[string]*Node)
+var Router *upnp.IGD
+var WaitGroup = new(sync.WaitGroup)
 var extIp string
 
 var DefaultNode = NodeConfig{
@@ -52,9 +55,23 @@ var DefaultNode = NodeConfig{
 
 func Init() error {
 	if settings.Settings.UPnP {
-		Router, _ = upnp.Discover()
+		var err = error(nil)
+		if Router, err = upnp.Load(settings.Settings.Router); err != nil {
+			if Router, err = upnp.DiscoverCtx(context.Background()); err == nil {
+				settings.Settings.Router = Router.Location()
+				log.Info("Updated UPnP router")
+			} else {
+				settings.Settings.UPnP = false
+				log.Info("Could not locate UPnP router, disabling UPnP")
+			}
+			settings.Settings.Save()
+		}
+
 		extIp, _ = Router.ExternalIP()
-		log.Info("UPnP port forwarding on external host " + extIp)
+
+		if err == nil {
+			log.Info("UPnP port forwarding on external host " + extIp)
+		}
 	} else {
 		log.Info("UPnP disabled")
 	}
@@ -98,13 +115,13 @@ func Init() error {
 		return errors.New("fatal: 'nodes' directory could not be created")
 	}
 
-	// COMMANDS FOR NODE STUFF
+	// node commands !
 	input.Command{
 		Function: func(s []string) {
 			log.Info("Showing nodes:")
 
-			for _, node := range Active {
-				log.Info(node.Config.Name + " (" + node.Id + ") > Port: " + node.Config.Port + ", Memory: " + strconv.Itoa(int(node.Config.Memory)) + " Active: " + strconv.FormatBool(node.active))
+			for _, node := range Nodes {
+				log.Info(node.Config.Name + " (" + node.Id + ") > Port: " + node.Config.Port + ", Memory: " + strconv.Itoa(int(node.Config.Memory)) + " Nodes: " + strconv.FormatBool(node.active))
 			}
 		},
 		Command:     "nodes",
@@ -139,6 +156,14 @@ func Init() error {
 				return
 			}
 
+			if s[1] == "*" {
+				log.Info("Starting all nodes")
+				for _, n := range Nodes {
+					n.Start()
+				}
+				return
+			}
+
 			node, err := Get(s[1])
 
 			if err != nil {
@@ -151,7 +176,7 @@ func Init() error {
 			}
 		},
 		Command:     "start",
-		Args:        " <id>",
+		Args:        " <id/*>",
 		Description: "Start a node",
 	}.Register()
 
@@ -191,6 +216,12 @@ func Init() error {
 				return
 			}
 
+			if s[1] == "*" {
+				log.Info("Sending stop command to all nodes")
+				StopAll()
+				return
+			}
+
 			node, err := Get(s[1])
 
 			if err != nil {
@@ -206,7 +237,7 @@ func Init() error {
 			log.Info("Sending stop command to " + node.Config.Name + " (" + node.Id + ")")
 		},
 		Command:     "stop",
-		Args:        " <id>",
+		Args:        " <id/*>",
 		Description: "Send stop command to a node",
 	}.Register()
 
@@ -214,6 +245,12 @@ func Init() error {
 		Function: func(s []string) {
 			if len(s) != 2 {
 				log.Error("Invalid arguments")
+				return
+			}
+
+			if s[1] == "*" {
+				log.Info("Killing all nodes")
+				KillAll()
 				return
 			}
 
@@ -232,7 +269,7 @@ func Init() error {
 			log.Info("Sending kill command to " + node.Config.Name + " (" + node.Id + ")")
 		},
 		Command:     "kill",
-		Args:        " <id>",
+		Args:        " <id/*>",
 		Description: "Send kill command to node",
 	}.Register()
 
@@ -243,6 +280,14 @@ func Init() error {
 				return
 			}
 
+			if s[1] == "*" {
+				log.Info("Monitoring all nodes")
+				for _, n := range Nodes {
+					n.Monitor = true
+				}
+				return
+			}
+
 			node, err := Get(s[1])
 
 			if err != nil {
@@ -259,7 +304,7 @@ func Init() error {
 			}
 		},
 		Command:     "monitor",
-		Args:        " <id>",
+		Args:        " <id/*>",
 		Description: "Monitor the output of a node while it is active",
 	}.Register()
 
@@ -270,23 +315,29 @@ func Init() error {
 				return
 			}
 
-			node, err := Get(s[1])
-
-			if err != nil {
-				log.Error("Error monitoring node: " + err.Error())
+			if s[1] == "*" {
+				log.Info("Accepted EULA for all nodes")
+				for _, n := range Nodes {
+					n.AcceptEULA()
+				}
 				return
 			}
 
-			if node.Monitor {
-				log.Info("No longer monitoring " + node.Config.Name + " (" + node.Id + ")")
-				node.Monitor = false
-			} else {
-				log.Info("Monitoring " + node.Config.Name + " (" + node.Id + ")")
-				node.Monitor = true
+			node, err := Get(s[1])
+
+			if err != nil {
+				log.Error("Error accepting EULA: " + err.Error())
+				return
 			}
+
+			if err := node.AcceptEULA(); err != nil {
+				log.Error("Error accepting EULA: " + err.Error())
+			}
+
+			log.Info("Accepted EULA for " + node.Config.Name + " (" + node.Id + ")")
 		},
-		Command:     "monitor",
-		Args:        " <id>",
+		Command:     "eula",
+		Args:        " <id/*>",
 		Description: "Monitor the output of a node while it is active",
 	}.Register()
 
@@ -319,7 +370,7 @@ func Init() error {
 
 			node, err := Get(s[1])
 
-			if err != nil {
+			if err != nil && s[1] != "*" {
 				log.Error("Error changing node config: " + err.Error())
 				return
 			}
@@ -330,6 +381,14 @@ func Init() error {
 				val += s[i] + " "
 			}
 			val = strings.TrimSpace(val)
+
+			if s[1] == "*" {
+				log.Info("Set " + strings.ToLower(s[2]) + " to " + val + " for all nodes")
+				for _, n := range Nodes {
+					n.SetConfig(strings.ToLower(s[2]), val)
+				}
+				return
+			}
 
 			if err := node.SetConfig(strings.ToLower(s[2]), val); err != nil {
 				log.Error("Error changing node config: " + err.Error())
@@ -348,7 +407,7 @@ func Init() error {
 }
 
 func Load(id string) (*Node, error) {
-	if n, ok := Active[id]; ok {
+	if n, ok := Nodes[id]; ok {
 		return n, nil
 	}
 
@@ -373,13 +432,13 @@ func Load(id string) (*Node, error) {
 		n.Start()
 	}
 
-	Active[id] = n
+	Nodes[id] = n
 
 	return n, nil
 }
 
 func Get(id string) (*Node, error) {
-	n, ok := Active[id]
+	n, ok := Nodes[id]
 	if !ok {
 		return nil, errors.New("node '" + id + "' does not exist or is not loaded into memory")
 	}
@@ -404,19 +463,19 @@ func Create(id string) (*Node, error) {
 		return nil, node.SaveConfig()
 	}
 
-	Active[id] = &node
+	Nodes[id] = &node
 
 	return &node, nil
 }
 
 func StopAll() {
-	for _, n := range Active {
+	for _, n := range Nodes {
 		n.SendCommand("stop")
 	}
 }
 
 func KillAll() {
-	for _, n := range Active {
+	for _, n := range Nodes {
 		n.Kill()
 	}
 }
@@ -449,7 +508,12 @@ func (n *Node) Start() error {
 
 	port, _ := strconv.Atoi(n.Config.Port)
 	if n.Config.PortForward && settings.Settings.UPnP {
-		if err := Router.Forward(uint16(port), "overload port forwarding", "tcp"); err != nil {
+		if inuse, _ := Router.IsForwardedTCP(uint16(port)); inuse {
+			log.Info("Port " + n.Config.Port + " is already forwared and may overlap with another public port")
+		}
+
+		Router.Clear(uint16(port))
+		if err := Router.Forward(uint16(port), "overload port forwarding"); err != nil {
 			log.Error("Failed to port forward " + n.Config.Name + ": " + err.Error())
 		} else {
 			ip = extIp
@@ -467,6 +531,8 @@ func (n *Node) Start() error {
 
 	scanner := bufio.NewScanner(reader)
 
+	WaitGroup.Add(1)
+
 	go func() {
 		for scanner.Scan() {
 			if n.Monitor {
@@ -478,10 +544,10 @@ func (n *Node) Start() error {
 		log.Info("Stopped " + n.Config.Name + " (" + n.Id + ")")
 
 		if n.Config.PortForward && settings.Settings.UPnP {
-			if err := Router.Clear(uint16(port), "tcp"); err != nil {
-				log.Error("Error clearing port forward for " + n.Id + ": " + err.Error())
-			}
+			Router.Clear(uint16(port))
 		}
+
+		WaitGroup.Done()
 	}()
 
 	n.cmd.Start()
