@@ -16,7 +16,7 @@ import (
 func Init() {
 	input.Command{
 		Function: func(s []string) {
-			if len(s) < 3 || len(s) > 5 {
+			if len(s) != 3 {
 				log.Error("Invalid arguments")
 				return
 			}

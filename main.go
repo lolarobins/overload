@@ -42,7 +42,7 @@ func mkdirReq(names ...string) bool {
 }
 
 func main() {
-	log.Info("Starting overload v0.1.0")
+	log.Info("Starting overload v0.1.1")
 
 	// uwu
 	rand.Seed(time.Now().UTC().UnixNano())

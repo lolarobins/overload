@@ -45,7 +45,6 @@ var extIp string
 
 var DefaultNode = NodeConfig{
 	Name:        "Minecraft Server",
-	Jar:         "spigot-latest.jar",
 	JVM:         "java",
 	Port:        "[N/A IN DEFAULT CONFIG]",
 	Memory:      1024,
