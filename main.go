@@ -1,0 +1,65 @@
+package main
+
+import (
+	"math/rand"
+	"os"
+	"time"
+
+	"lolarobins.ca/overload/input"
+	"lolarobins.ca/overload/log"
+	"lolarobins.ca/overload/node"
+	"lolarobins.ca/overload/settings"
+	"lolarobins.ca/overload/webserver"
+)
+
+func shutdown() {
+	log.Info("Stopping")
+
+	log.Info("Killing remaining active nodes")
+	node.KillAll()
+}
+
+func mkdirReq(names ...string) bool {
+	for _, name := range names {
+		if _, err := os.ReadDir(name); os.IsNotExist(err) {
+			log.Info("Creating directory '" + name + "'")
+
+			if err := os.Mkdir(name, 0777); err != nil {
+				log.Error("Failed to create required directory '" + name + "': " + err.Error())
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func main() {
+	log.Info("Starting overload v0.1.0")
+
+	// uwu
+	rand.Seed(time.Now().UTC().UnixNano())
+
+	if !mkdirReq("config", "jar", "nodes") {
+		return
+	}
+
+	input.Init()
+	if err := settings.Init(); err != nil {
+		log.Error("Intializing settings: " + err.Error())
+	}
+
+	if err := node.Init(); err != nil {
+		log.Error("Intializing nodes: " + err.Error())
+	}
+
+	if err := webserver.Init(); err != nil {
+		log.Error("Intializing web server: " + err.Error())
+	}
+
+	log.Info("Startup finished")
+
+	input.AcceptInput()
+
+	shutdown()
+}
