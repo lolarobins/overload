@@ -29,13 +29,20 @@ func Init() {
 						log.Error("Fetching paper: " + err.Error())
 					}
 				}()
+			case "waterfall":
+				log.Info("Starting a goroutine to fetch server jar for Waterfall version '" + s[2] + "'")
+				go func() {
+					if err := FetchWaterfall(s[2]); err != nil {
+						log.Error("Fetching waterfall: " + err.Error())
+					}
+				}()
 			default:
 				log.Error("Fetching server jar: implementation not found")
 			}
 		},
 		Command:     "fetch",
-		Args:        " <implementation> <version>",
-		Description: "Fetch server jars for common server implementations such as Spigot, Paper, Bungee, etc",
+		Args:        " <implementation> <version/latest>",
+		Description: "Fetch server jars for common server implementations. (currently: paper, waterfall) etc",
 	}.Register()
 }
 
@@ -120,6 +127,79 @@ func FetchPaper(version string) error {
 	}
 
 	log.Info("Done fetching PaperMC version '" + version + "' (Build: " + strconv.Itoa(build) + ")")
+
+	return nil
+}
+
+func FetchWaterfall(version string) error {
+	// fetch paper script
+	if strings.ToLower(version) == "latest" {
+		resp, err := http.Get("https://api.papermc.io/v2/projects/waterfall")
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+
+		versions := &paperVersions{}
+		json.Unmarshal(body, versions)
+
+		version = versions.Versions[len(versions.Versions)-1]
+	}
+
+	resp, err := http.Get("https://api.papermc.io/v2/projects/waterfall/versions/" + version)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	switch resp.StatusCode {
+	case 404:
+		err := &paperErr{}
+		json.Unmarshal(body, err)
+
+		return errors.New(err.Err)
+	case 200:
+	default:
+		return errors.New("unhandled http response")
+	}
+
+	builds := &paperBuilds{}
+	json.Unmarshal(body, builds)
+
+	build := builds.Builds[len(builds.Builds)-1]
+
+	out, err := os.Create("jar/waterfall-" + version + ".jar")
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	resp, err = http.Get("https://api.papermc.io/v2/projects/waterfall/versions/" + version + "/builds/" + strconv.Itoa(build) + "/downloads/waterfall-" + version + "-" + strconv.Itoa(build) + ".jar")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return errors.New("could not fetch download file")
+	}
+
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		return err
+	}
+
+	log.Info("Done fetching Waterfall version '" + version + "' (Build: " + strconv.Itoa(build) + ")")
 
 	return nil
 }
