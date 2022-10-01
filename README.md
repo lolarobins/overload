@@ -34,6 +34,7 @@ Setting up a node from a fresh install can get you a playable server with the fo
 - `eula test` > Accept EULA for test
 - `monitor test` > View console output for test
 - `start test` > Start the server
+
 And done! You now have a playable Minecraft server open to the world (if portforwarded using UPnP)!
 
 ## Contribution
